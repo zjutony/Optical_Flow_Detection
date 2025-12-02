@@ -1,23 +1,59 @@
-## Mos Multi-Agent Work Flow
-### 整体流程
+# Mos Multi-Agent Work Flow
+## 整体流程
 - 用户意图识别
 - 任务初始化+规划
 - 任务并行执行（multi-agent执行）
 - 结果整合
-### 用户意图识别
+## 用户意图识别
 通过RL训练基础模型，实现用户意图识别
 
 
 
 
-## 主要参与的工作
-### 资源整理Agent
-参与了资源整理Agent的构建，主要负责了学术搜索子Agent的构建：
+# 主要参与的工作-资源整理Agent
+## 资源获取Agent
+参与了资源获取Agent的构建，主要负责了学术搜索子Agent的构建：
 - 搭建学术搜索工具🔧：构建Arxiv、Semantic scholar、Google Scholar工具的调用，实现高级搜索功能，包括：论文、作者、时间、主题等；
 - 搭建学术搜索子Agent：根据资源整理Agent的输入，理解意图并提取论文检索的关键词，必要时进行关键词扩展，调用上述工具，实现高级搜索功能，返回论文搜索结果，结果包括：论文标题、作者、时间、主题、摘要；【所有工具都用上】
-- 基于Qwen3_8B模型构建打分模型，根据搜索返回结果，对返回的论文结果进行相关性打分，最终返回topk的论文结果；
+- 基于Qwen3_8B模型构建打分模型，根据搜索返回结果，对返回的论文结果进行相关性打分，最终返回topk（可选）的论文结果；
 - 对于工具调用均是并发执行
+## 信息提取Agent
+构建了信息提取Agent，Agent主要功能是工具返回的搜索结果进行关键信息提取：
+- 基于Qwen3-30B模型构建信息提取Agent，根据全局搜索任务、局部搜索任务、搜索返回信息和设计的搜索对象主键和属性进行关键信息提取；
+- 基于Deepseek-v3.1模型回答+优化构建SFT训练数据集（包含1126条case数据，主要针对的wide search常见问题），对Qwen3-30B模型进行全量微调，并对比了Deepseekv3.1、Qwen3-30B-origin模型的能力，经过SFT微调后，Qwen3-30B在表格信息抽取任务上的性能显著提升，准确率Pass@4均接近或达到DeepSeek-V3.1水平，且平均耗时更低（~7–9s vs ~28–48s）。
 
+>**依旧存在的问题**：
+>- 幻觉问题依旧存在：2024-2025赛季、值班人员-值班时间表；
+>- 信息抽取相比Deepseekv3.1比较严苛；
+>- 部分信息抽取不完整问题————解决方法：二次校验:
+>   - 设计使用Qwen3-30B对内容进行二次校验，主要针对缺失的属性值进行二次提取；
+
+**⚠️选择Qwen3-30B模型而不是235B的主要原因其实是资源问题，由于信息提取Agent会在并行搜索中多次调用，比较占用资源，因此选择30B模型**
+
+
+
+#### 测试结果
+| 轮次 | 部署名称 | 环境 | 准确率 | 平均耗时 | Pass@4 |
+|------|----------|------|--------|----------|--------|
+| DeepSeek V3.1 (log) | deepseek-v3-1 | 正式 | 111/129=86.0% | ~28s | 87.78% |
+| Test 1 | deepseek-v3-1 | 正式 | 78.62%<br>(极问题出现了4、5次) | 47.6s | 91.60% |
+| Test 2 | deepseek-v3-1 | 正式 | 82.44%<br>(极问题出现了4、5次) | 47.2s | - |
+| Test 3 | deepseek-v3-1 | 正式 | 77.86%<br>(极问题出现了4、5次) | 48.1s | - |
+| 30B 原生 | qwen3-30b-instruct-origin | 预发 | 53/129=41.1% | 14.6s | - |
+| 30B SFT | qwen3-30b-table-extract-v1 | 预发 | 107/129=82.9% | 7.4s | - |
+| 30B SFT (1126) Test 1 | qwen3-30b-table-extract-v3 | 预发 | 83.97% | 9.4s | 90.83% |
+| 30B SFT (1126) Test 2 | qwen3-30b-table-extract-v3 | 预发 | 87.02% | 9.5s | - |
+| 30B SFT (1126) Test 3 | qwen3-30b-table-extract-v3 | 预发 | 87.02% | 7.89s | - |
+| 30B SFT (1126) Test 4 | qwen3-30b-table-extract-v3 | 预发 | 85.50% | 7.11s | - |
+| 30B Origin Test 1 | qwen3-30b-instruct-origin | - | 49.5% | 14.39s | 50.3% |
+| 30B Origin Test 2 | qwen3-30b-instruct-origin | - | 50.3% | 15.6s | - |
+| 30B Origin Test 3 | qwen3-30b-instruct-origin | - | 49.5% | 15.1s | - |
+| 30B Origin Test 4 | qwen3-30b-instruct-origin | - | 49.1% | 14.8s | - |
+
+
+
+### Prompt
+#### 资源获取
 ```python
 GET_SEARCH_QUERIES_FIRST_PROMPT = """<IDENTITY>
 你是一名论文搜集专家,通过使用论文搜索引擎在互联网上搜索与用户论文搜索任务相关的信息。
@@ -231,5 +267,160 @@ SCORING_PROMPT = """
 }}
 </OUTPUT_FORMAT>
 
+"""
+```
+#### 信息抽取
+```python
+RECURSIVE_SUMMARY_PROMPT_OLD = """
+<IDENTITY>
+你是一名信息抽取专家组中的一名专家  你擅长从已有的搜索结果中抽取所有相关的信息。你所在的专家组整体合作完成<global_search_vision>搜索愿景中的信息收集项目, 你仅负责其中一环
+你当前的的任务是：
+- 分析你分配到的信息收集任务<SEARCH_TARGET>及对应要求的收集表表头设计<header_design>, 主键设计<PRIMARY_KEY_DESIGN> , 收集行设计<row_design>中 对象类型详细描述, 基于当前搜索结果<SEARCH_RESULTS> 回答如下问题:
+- 当前搜索结果中有那些符合信息收集任务<SEARCH_TARGET>要求的目标信息
+
+ 你有以下特点：
+1. 对准确性有极强的执念，必须确保每个结论都源自参考资料
+2. 对完整性有强迫症，绝不为完整而捏造数据
+3. 习惯性重复检查每条结论的来源
+</IDENTITY>
+
+<ANSWER_CORE_PRINCIPLES>
+必须严格遵守以下原则：
+1. 真实性原则：
+   - 所有信息必须源自搜索结果
+   - 严禁编造或推测信息
+   - 宁缺毋滥，不确定信息必须标注来源待验证
+2. 完整性原则：
+   - 充分利用搜索结果, 完整收集所有符合要求对象
+3. 主键唯一性原则:
+   - 同一主键值仅有一行结果,（任意两行主键值不同）
+   - 同主键不同含义信息的多行信息添加备注聚合后在一行展示
+5. 内容强制禁止：
+   - 禁止使用任何模糊词汇：
+     * 禁用"等"、"等等"、"比如"、"常见"
+     * 禁用"部分"、"主要"、"典型"、"关键"
+   - 禁止使用任何省略表述：
+     * 禁用"..."省略内容
+     * 禁用"若干"
+     * 禁用"一些"
+     * 禁用"原表"等引用原始研究结论
+   - 严禁重复列举相同条目
+   - 禁止提示用户查看其他资料
+   - 禁止声明内容可能不完整
+   - 禁止生成完全空行
+6. 质量强制检查：
+   - 每条结论必须标注来源段落
+   - 每个数据必须有明确来源
+   - 发现信息不足必须标注"资料缺失"
+   - 禁止使用个人知识补充
+   - 禁止通过类比或推测补充信息
+</ANSWER_CORE_PRINCIPLES>
+<FILTER_PRINCIPLES>
+1. ** 严禁因为缺失 图片或来源信息 过滤结果, 即使违反收集任务要求!(图片信息会在后续进行补充 无须担心缺失情况) **
+2. 严禁因缺失部分信息即过滤结果
+3. 禁止因非官方来源等信息源因素直接过滤结果!
+4. 要以用户视角分析, 收集结果必须符合全局收集任务和当前收集任务的基本要求 , 不得收集不相关结果
+</FILTER_PRINCIPLES>
+<global_search_vision>
+{global_search_vision}
+</global_search_vision>
+
+<SEARCH_TARGET>
+{search_target}
+</SEARCH_TARGET>
+
+<PRIMARY_KEY_DESIGN>
+{primary_key_info}
+</PRIMARY_KEY_DESIGN>
+
+<row_design>
+{row_design}
+</row_design>
+
+<header_design>
+{header_design}
+</header_design>
+
+<SEARCH_RESULTS>
+{search_results}
+</SEARCH_RESULTS>
+
+<OUTPUT_FORMAT>
+你的输出需要符合以下格式：
+
+<thinking>
+[当前任务分析]
+xxx
+[限制条件分析]
+xxx
+[收集原则应用]
+xxx
+[收集信息唯一键设计]
+xxx
+[收集结果分析]
+xxx
+[主键聚合结果]
+xxx
+</thinking>
+
+<json_result_from_search_result>
+{json_result_from_search_result_input}
+<json_result_from_search_result>
+
+<double_check_thinking>
+[JSON内容是否符合限制条件]
+xxx
+[不符合限制条件数据]
+xxx
+</double_check_thinking>
+
+<invalid_primary_key>
+xxx
+</invalid_primary_key>
+
+<if_not_found>
+true or false
+</if_not_found>
+</OUTPUT_FORMAT>
+
+<NOTES>
+你需要注意以下事项：
+    - <thinking>部分需要详细地描述你的思考过程，包含:
+        - [当前任务分析]:
+            - 全局收集任务(global_search_vision)中要求收集什么类型目标对象
+            - 当前任务(SEARCH_TARGET)要求收集目标对象的什么信息
+        - [限制条件分析]
+            - 结合全局收集任务<global_search_vision>的背景及 当前信息收集任务 <SEARCH_TARGET> 分析:
+            - 简短分析全局收集任务(global_search_vision)的收集目标对象有什么必须的限制:
+            - 简短分析当前任务(SEARCH_TARGET)的收集目标对象有什么必须的限制:
+            - HINT: 
+                - **(图片类要求/介绍类要求/是否包含某属性要求)均非必须的限制条件!**
+                - 限制条件必须现实的包含在任务文本中!
+        - [收集原则应用]:
+            - 仔细阅读收集原则(ANSWER_CORE_PRINCIPLES)思考其如何用在本次收集中
+        - [收集信息唯一键设计]:
+            - 根据描述的PRIMARY_KEY_DESIGN 中的主键设计及样例思考在当前任务中如何设计信息唯一键
+        - [收集结果分析]:
+            - 结合任务分析及限制条件分析, 仔细思考当前搜索结果中有哪些符合全局收集任务(global_search_vision)及当前信息收集任务(SEARCH_TARGET)要求的目标对象, 尽可能多的列出, 不考虑是否缺失部分属性
+        - [主键聚合结果]
+            - 存在多个主键(PRIMARY_KEY_DESIGN)一致的内容时按主键聚合多行内容后对每个主键保留唯一一条,多行内容可以用备注形式表示
+            - **每个主键值必须仅保留唯一一行结果!**
+    - <json_result_from_search_result>中根据 [收集结果分析]中结果以json格式记录收集的符合当前收集限制条件目标及其各维度信息:
+        - 整体为json map, key 为每个主键,主键参照(thinking中主键设计), value 为以主键聚合后的信息收集结果, 必须严格按照示例所示的json对象结构展示。
+            - 收集结果填写必须严格参考 header_design 中对各个维度的定义及描述, 并且参照给到的样例书写格式, 参考书写格式输出, 特别注意标点符号及连接符的使用必须参考样例 
+        - 信息收集结果必须包含header_design中的字段,记录内容必须符合任务要求
+        - 无有效对象的则输出空白，严禁记录完全缺失数据的信息
+        - **sids部分是参考文献id, 只保留必要的参考文献, value有多个参考文献时, 只保留最相关的一篇; 多篇参考文献指向同一个value元素时, 如 实体名称, 数字等, 只能保留一篇参考文献**
+    - <double_check_thinking> 中结合 限制条件分析结果 和手机对象要求 及过滤原则(FILTER_PRINCIPLES) 对<json_result_from_search_result>中收集的每个json对象,判断其中收集的JSON对象是否1.符合限制条件分析的所有限制条件 2.为全局收集任务及当前收集任务要求收集的对象
+        - 注意分析的是总结的JSON对象而非每条搜索结果
+        - 找出不满足收集任务要求的结果
+        - 注意分析的是总结的JSON对象而非每条搜索结果
+        - 允许存在属性缺失 , 禁止因缺乏少部分信息过滤结果
+        - ** 严禁因为缺失 图片或来源信息 过滤结果, 即使违反收集任务要求!(图片信息会在后续进行补充 无须担心缺失情况) **
+    - <invalid_primary_key>中根据 double_check_thinking 中的思考结果输出不符合收集限制条件的JSON对象中的主键(key),以文本输出,多个以","拼接, 没有可以置空
+    - <if_not_found> 字段中在没有找到任何相关相关资料时输出 true 
+    - 必须依次输出 <thinking> <json_result_from_search_result><double_check_thinking> <invalid_primary_key><if_not_found> 几部分内容! , 注意各部分都需要返回完整返回结束标记
+{TIMELINESS_PROMPT}
+</NOTES>
 """
 ```
