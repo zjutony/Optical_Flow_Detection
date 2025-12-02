@@ -1,0 +1,63 @@
+# 项目进展记录
+1027–1028
+✅ 完成 Query CoT Benchmark 的整理与构建，基于 WideSearch Benchmark 进行扩展。
+详细设计参考文档：[Query CoT Benchmark 文档](https://alidocs.dingtalk.com/i/nodes/Qnp9zOoBVBDEydnQU5wPon6681DK0g6l)
+1029
+数据整理 + Case 浏览与标记
+1103–1104
+1. 二次校验优化完成：
+测试表明 Qwen3-235b-fp8 版本在效果上优于 deepseek-v3.1-default：
+正确率更高
+运行耗时基本更短
+2. 报告生成优化：
+a. 日志清洗完成：
+共提取 540 个 回答中包含路径的问答对，并成功匹配输入 prompt 与输出结果
+b. 对比验证 Qwen3-235b 模型能力（结果见下表）
+1105–1106
+报告生成相关 Prompt 修改与测试
+1110
+1. 测试 1105–1106 新日志内容（JSON 格式数据）
+测试结果详见：[测试结果文档](https://alidocs.dingtalk.com/i/nodes/gwva2dxOW4vRkd9DU7bDBYLgJbkz3BRL)
+2. 针对以下问题进行优化：
+Qwen 系列模型输出 ID 格式不一致
+偶尔出现否定性幻觉（negative hallucination）
+→ 通过 强化 Prompt 实现缓解
+1117–1121
+表格抽取模块优化：
+构建 ~500 条 表格抽取 Benchmark 数据
+基于该数据对 Qwen3-30B 进行 SFT 训练，并完成测评
+抽取 120 个 case 进行测试，结果如下：
+
+部署名称 环境 model_type 准确率 平均耗时
+-------- ------ -------------- -------- ----------
+DeepSeek V3.1 deepseek-v3-1 正式 111/129 = 86.0% ~28s（线上），未定量跑完，但应比 origin 更慢
+30B 原生 qwen3-30b-instruct-origin 预发 53/129 = 41.1% 14.6s
+30B SFT qwen3-30b-table-extract-v1 预发 107/129 = 82.9% 7.4s
+1124–1127
+SFT 数据集扩充：
+数据量从 500 条 → 1018 条
+在 120 个测试 case 中发现：
+SFT 后的 30B 模型与 DeepSeek 的主要差距在于 对部分词汇隐藏含义的理解不足，导致正确结果被错误过滤
+基于 1018 条数据重新训练，并进行 4 轮测评，计算 Pass@4 指标
+结果：SFT 后的 Qwen3-30B 模型信息提取能力 基本与 DeepSeek-V3.1 持平
+多轮测评结果汇总
+
+轮次 部署名称 环境 准确率 平均耗时 Pass@4
+------ -------- ------ -------- ---------- --------
+DeepSeek V3.1 (log) deepseek-v3-1 正式 111/129 = 86.0% ~28s 87.78%
+test1 deepseek-v3-1 正式 78.62%<br>（“极问题”出现 4–5 次） 47.6s 91.60%
+test2 deepseek-v3-1 正式 82.44%<br>（“极问题”出现 4–5 次） 47.2s —
+test3 deepseek-v3-1 正式 77.86%<br>（“极问题”出现 4–5 次） 48.1s —
+30B 原生 qwen3-30b-instruct-origin 预发 53/129 = 41.1% 14.6s —
+30B SFT (v1) qwen3-30b-table-extract-v1 预发 107/129 = 82.9% 7.4s —
+30B SFT (1126, v3) qwen3-30b-table-extract-v3 预发 — — —
+&nbsp;&nbsp;test1 — — 83.97% 9.4s 90.83%
+&nbsp;&nbsp;test2 — — 87.02% 9.5s —
+&nbsp;&nbsp;test3 — — 87.02% 7.89s —
+&nbsp;&nbsp;test4 — — 85.50% 7.11s —
+30B Origin (Pass@4 测试) qwen3-30b-instruct-origin — — — —
+&nbsp;&nbsp;test1 — — 49.5% 14.39s 50.3%
+&nbsp;&nbsp;test2 — — 50.3% 15.6s —
+&nbsp;&nbsp;test3 — — 49.5% 15.1s —
+&nbsp;&nbsp;test4 — — 49.1% 14.8s —
+💡 结论：经过 SFT 微调后，Qwen3-30B 在表格信息抽取任务上的性能显著提升，准确率与推理效率均接近或达到 DeepSeek-V3.1 水平，且 平均耗时更低（~7–9s vs ~28–48s）。
